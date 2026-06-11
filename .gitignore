@@ -138,3 +138,6 @@ dmypy.json
 .Rhistory
 .Rprofile
 renv/
+
+# Pixi environments (keep pixi.toml and pixi.lock in git)
+.pixi/

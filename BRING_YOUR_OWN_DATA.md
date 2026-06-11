@@ -84,21 +84,7 @@ Example:
 
 ### I want to predict whether there may be missing links
 
-Bring two files:
-
-- a network edge list with `source` and `target`
-- a file with candidate pairs and a label
-
-Candidate-pair file:
-
-- `source`
-- `target`
-- `label`
-
-Where:
-
-- `label = 1` means a true edge
-- `label = 0` means a non-edge
+Bring a network edge list with `source` and `target`. The candidate pairs (possible missing links) are created automatically during the practical.
 
 Example:
 

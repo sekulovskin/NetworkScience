@@ -1,10 +1,13 @@
 # Network Science Summer School
 Clone the repository or check the course website: https://net-science.github.io/
 
+Before the course:
+- Install R and Python and test your installation: [PREPARATION.md](PREPARATION.md) and the [Installation folder](Installation/)
+- Optionally, prepare your own dataset for the practicals: [BRING_YOUR_OWN_DATA.md](BRING_YOUR_OWN_DATA.md)
 
 Run code without downloading it (for now only available for the tutorials in Python):
 - On binder: [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/jgarciab/NetworkScience/HEAD) 
-- On Google Colab: [![Google Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/jgarciab/NetworkScience) (you will need to install the libraries manually.
+- On Google Colab: [![Google Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/jgarciab/NetworkScience) (you will need to install the libraries manually)
 
 # Description
 

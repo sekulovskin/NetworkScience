@@ -1,17 +1,21 @@
-name: networks
+name: network-science-summer-school
 channels:
   - conda-forge
 dependencies:
-  - seaborn
+  - python>=3.11,<3.13
+  - cairocffi
+  - python-igraph
+  - ipykernel
   - ipython
-  - pandas
-  - numpy
-  - scipy
+  - jupyter_core
+  - jupyterlab
   - matplotlib
   - networkx
-  - jupyter_core
   - notebook
-  - python-igraph
-  - pycairo
-  - cairocffi
   - numba
+  - numpy
+  - pandas
+  - pycairo
+  - scikit-learn
+  - scipy
+  - seaborn

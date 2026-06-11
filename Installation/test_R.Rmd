@@ -27,7 +27,7 @@ df <- tibble(
 
 
 # Convert to igraph
-g <- graph.data.frame(d = df, directed = FALSE)
+g <- graph_from_data_frame(d = df, directed = FALSE)
 ```
 
 
@@ -39,7 +39,7 @@ plot(g)#, layout = layout_with_fr(g), vertex.size = 20)
 ```{r}
 # Calculate measures
 diameter(g)
-assortativity.degree(g)
+assortativity_degree(g)
 edge_density(g)
 transitivity(g, type = "average", isolates="zero")
 transitivity(g)
