@@ -1,0 +1,730 @@
+---
+title: "1b. Matrix Multiplication and Centrality (R / igraph edition)"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: false
+    embed-resources: true
+    html-math-method: katex
+execute:
+  warning: false
+  message: false
+---
+
+# 1b. Matrix Multiplication and Centrality
+
+Welcome to the afternoon practical! In this session we connect **linear algebra** to **networks**: the adjacency matrix is not just storage, it is a tool that answers questions about the network when you multiply it by things.
+
+**Learning objectives**
+
+- Represent a network as an adjacency matrix and convert back and forth between formats.
+- Understand what `A %*% x` and `A %*% A` answer about the network.
+- Use `A^n` to count walks of length `n`, triangles, and the local clustering coefficient.
+- Compute and compare the main centrality measures (degree, closeness, betweenness, eigenvector, PageRank, harmonic, HITS).
+
+**Sections**
+
+0. Setup and helpers
+1. Network representations
+2. Matrix multiplication = combining neighbour attributes
+3. Matrix multiplication and paths
+4. Node centrality on the Florentine network
+5. Centrality on real networks (Twitter, PPI)
+6. Eigenvector and PageRank via the power method
+7. Centrality side-by-side comparison
+
+## Section 0: Setup and helpers
+
+```{r}
+#| label: c-install
+# If you are missing packages, install them by uncommenting:
+# install.packages(c("igraph", "dplyr", "readr", "tidyr", "ggplot2", "RColorBrewer", "network"))
+```
+
+```{r}
+#| label: c-path
+# Path to the data folder (relative to this .qmd file)
+path_data <- "../../../Data/"
+```
+
+```{r}
+#| label: c-setup
+# Core libraries
+library(igraph)        # Primary network library for this practical
+library(dplyr)         # Data manipulation
+library(readr)         # Reading CSV / TSV files
+library(tidyr)         # Reshaping data
+library(ggplot2)       # Plotting
+library(RColorBrewer)  # Colour palettes
+
+# Visual style for the whole notebook
+palette_ns <- c("#3d348b", "#e6af2e", "#191716", "#e0e2db")
+theme_set(
+  theme_minimal(base_size = 13) +
+    theme(
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(color = "lightgray")
+    )
+)
+
+# A diverging palette comparable to matplotlib's "coolwarm"
+coolwarm_palette <- colorRampPalette(rev(brewer.pal(11, "RdBu")))
+value_to_color <- function(values, n = 256) {
+  vals <- as.numeric(values)
+  rng <- range(vals, finite = TRUE)
+  if (diff(rng) < 1e-12) rng <- rng + c(-1, 1) * 1e-9
+  idx <- pmax(1, pmin(n, round(1 + (n - 1) * (vals - rng[1]) / diff(rng))))
+  coolwarm_palette(n)[idx]
+}
+
+# Reproducibility seed (igraph layouts use R's RNG under the hood)
+set.seed(1)
+```
+
+```{r}
+#| label: c-helpers
+# --- Helper functions for visualisation and conversion (igraph edition) ---
+# These mirror the Python helpers; they use only igraph + base R graphics.
+
+plot_network <- function(g, values = NULL, with_labels = TRUE,
+                         main = "", layout = NULL) {
+  # Draw an igraph network. Node size and colour are scaled to `values`.
+  if (is.null(values)) {
+    deg <- degree(g)
+    values <- deg / max(1, max(deg))
+  }
+  values <- as.numeric(values)
+
+  node_colors <- value_to_color(values)
+  span <- max(values) - min(values)
+  if (span < 1e-12) span <- 1
+  sizes <- 12 + 25 * (values - min(values)) / span
+
+  labels <- if (with_labels && "name" %in% vertex_attr_names(g)) V(g)$name else NA
+
+  if (is.null(layout)) {
+    set.seed(1)
+    layout <- layout_with_fr(g)
+  }
+  plot(g, layout = layout,
+       vertex.size = sizes, vertex.color = node_colors,
+       vertex.label = labels, vertex.label.cex = 0.8,
+       vertex.label.color = "#191716",
+       edge.color = "darkgray",
+       main = main)
+}
+
+plot_table <- function(A, names_v) {
+  # Render an adjacency matrix as a grid of numbers, highlighting non-zero cells.
+  n <- nrow(A)
+  plot(NULL, xlim = c(0.5, n + 0.5), ylim = c(0.5, n + 0.5),
+       axes = FALSE, xlab = "", ylab = "", asp = 1)
+  for (i in seq_len(n)) {
+    for (j in seq_len(n)) {
+      bg <- if (A[i, j] > 0) "#e6af2e" else "white"
+      rect(j - 0.5, n - i + 0.5, j + 0.5, n - i + 1.5,
+           col = bg, border = "lightgray")
+      text(j, n - i + 1, A[i, j], cex = 0.8)
+    }
+  }
+  axis(3, at = seq_len(n), labels = names_v, las = 2, cex.axis = 0.7,
+       tick = FALSE, line = -1)
+  axis(2, at = rev(seq_len(n)), labels = names_v, las = 1, cex.axis = 0.7,
+       tick = FALSE, line = -1)
+}
+
+plot_network_adj <- function(g, values = NULL, main = "") {
+  # Three-panel display: network, adjacency-as-table, adjacency spy plot.
+  op <- par(mfrow = c(1, 3), mar = c(2, 3, 3, 1))
+  plot_network(g, values = values, main = main)
+
+  A <- as_adjacency_matrix(g, sparse = FALSE)
+  names_v <- if ("name" %in% vertex_attr_names(g)) {
+    V(g)$name
+  } else {
+    as.character(seq_len(vcount(g)))
+  }
+  plot_table(A, names_v)
+
+  # spy plot: just the non-zero positions
+  nz <- which(A != 0, arr.ind = TRUE)
+  plot(nz[, "col"], nrow(A) - nz[, "row"] + 1,
+       pch = 15, cex = 2, col = "#3d348b",
+       xlim = c(0.5, ncol(A) + 0.5), ylim = c(0.5, nrow(A) + 0.5),
+       axes = FALSE, xlab = "", ylab = "", asp = 1)
+  axis(3, at = seq_len(ncol(A)), labels = names_v, las = 2, cex.axis = 0.7,
+       tick = FALSE, line = -1)
+  axis(2, at = rev(seq_len(nrow(A))), labels = names_v, las = 1, cex.axis = 0.7,
+       tick = FALSE, line = -1)
+  par(op)
+}
+
+adj_to_net <- function(A, names_v = c("Alice", "Bob", "John", "Amy", "Mike", "Rose")) {
+  # Build a directed igraph from a (dense) adjacency matrix and attach names.
+  A <- as.matrix(A)
+  g <- graph_from_adjacency_matrix((A > 0) * 1, mode = "directed")
+  if (!is.null(names_v) && length(names_v) == vcount(g)) {
+    V(g)$name <- names_v
+  }
+  g
+}
+```
+
+---
+
+## Section 1: Network representations
+
+We will work with the same tiny 6-person network in two flavours, directed and undirected, so we can see how the adjacency matrix changes.
+
+### 1.1 Build the toy directed and undirected networks
+
+Edges (read as "A points to B" for the directed version):
+
+```
+Alice -> Bob
+John  -> Alice
+Bob   -> John
+Amy   -> John
+Mike  -> John
+Rose  -> Alice
+Mike  -> Rose
+```
+
+```{r}
+#| label: c-toy-build
+# Create small network
+edges <- tibble(
+  from = c("Alice", "John",  "Bob",  "Amy",  "Mike", "Rose",  "Mike"),
+  to   = c("Bob",   "Alice", "John", "John", "John", "Alice", "Rose")
+)
+
+G_dir   <- graph_from_data_frame(edges, directed = TRUE)
+G_undir <- graph_from_data_frame(edges, directed = FALSE)
+
+plot_network_adj(G_dir, main = "Directed")
+plot_network_adj(G_undir, main = "Undirected (matrix is symmetric)")
+```
+
+Notice that the undirected adjacency matrix is **symmetric** (`A == t(A)`), while the directed one is generally not.
+
+### 1.2 Convert between formats
+
+The three common representations are:
+
+1. **Edgelist** (data frame of source/target) — easy to read, easy to import/export.
+2. **Adjacency matrix** (`matrix`) — perfect for linear algebra.
+3. **Graph object** — what `igraph` actually uses to compute on.
+
+A good network library lets you round-trip between all three. Let's do it.
+
+```{r}
+#| label: c-convert
+# To edgelist (vertex ids)
+df <- as_edgelist(G_dir, names = FALSE) |>
+  as.data.frame() |>
+  setNames(c("source", "target"))
+df
+
+# get the real names
+vertex_names <- V(G_dir)$name
+df$source <- vertex_names[df$source]
+df$target <- vertex_names[df$target]
+df
+
+# To adjacency (as a matrix with named rows/columns to visualize it)
+A <- as_adjacency_matrix(G_dir, sparse = FALSE)
+A
+```
+
+### 1.3 Add node metadata
+
+We attach a `children` attribute to each person. This will become the vector we multiply the adjacency matrix by in the next section.
+
+```{r}
+#| label: c-metadata
+# Attach one node attribute in graph vertex order.
+cat("Node order:", V(G_dir)$name, "\n")
+children_map <- c(Alice = 2, Bob = 0, John = 2, Amy = 0, Mike = 1, Rose = 5)
+V(G_dir)$children   <- children_map[V(G_dir)$name]
+V(G_undir)$children <- children_map[V(G_undir)$name]
+
+tibble(person = V(G_dir)$name, children = V(G_dir)$children)
+```
+
+```{r}
+#| label: c-attributes
+# Print node and edge attributes
+print(vertex_attr_names(G_dir))
+print(edge_attr_names(G_dir))
+```
+
+---
+
+## Section 2: Matrix multiplication = combining neighbour attributes
+
+> **The big idea.** Multiplying by the adjacency matrix `A` is the network's way of **asking a question about neighbours**.
+>
+> - `A %*% x` asks: *"for each node, what is the sum of my neighbours' values of `x`?"*
+> - `A %*% A` (= `A^2`) asks: *"for each pair of nodes, how many length-2 paths connect them?"*
+> - `A %*% A %*% A` (= `A^3`) asks the same about length-3 paths, and its diagonal counts triangles.
+>
+> Every linear-algebra operation we do in this practical is a small variation on those two questions.
+
+### 2.1 Average number of children of your friends
+
+For the **undirected** version of the network we want, for each node:
+
+`average_children_of_neighbours = (sum of neighbours' children) / (number of neighbours)`
+
+which in matrix form is:
+
+`avg = (A %*% children) / degree`
+
+```{r}
+#| label: c-avg-children-setup
+# Create adjacency matrix
+A <- as_adjacency_matrix(G_undir, sparse = FALSE)
+# And the number of children
+x <- as.numeric(V(G_undir)$children)
+
+# Plot network (node colour: number of own children)
+plot_network_adj(G_undir, values = x,
+                 main = "Node colour: own children")
+```
+
+```{r}
+#| label: c-avg-children
+# Calculate sum
+sum_children <- as.numeric(A %*% x)
+# Divide by degree
+degree_u <- rowSums(A)
+avg_children <- sum_children / degree_u
+
+# Put into a data frame to explore and visualize
+result <- tibble(
+  person           = V(G_undir)$name,
+  own_children     = as.integer(x),
+  neighbours_total = as.integer(sum_children),
+  degree           = as.integer(degree_u),
+  avg_neighbour    = round(avg_children, 2)
+)
+result
+```
+
+### 2.2 What does `t(A) %*% x` mean for a directed network?
+
+For the directed `G_dir`, `A[i, j] = 1` means **i points to j**. So `(A %*% x)[i]` sums values of nodes that `i` points to (its *out-neighbours*). What does `(t(A) %*% x)[i]` represent?
+
+```{r}
+#| label: c-transpose
+# Transpose the matrix to reverse the direction of the question.
+A <- as_adjacency_matrix(G_dir, sparse = FALSE)
+x <- as.numeric(V(G_dir)$children)
+plot_network_adj(G_dir, values = x)
+
+out_neighbour_sum <- as.numeric(A %*% x)
+in_neighbour_sum  <- as.numeric(t(A) %*% x)
+
+tibble(
+  person = V(G_dir)$name,
+  `A x (out-neighbours)`    = as.integer(out_neighbour_sum),
+  `t(A) x (in-neighbours)`  = as.integer(in_neighbour_sum)
+)
+# t(A) %*% x is the network asking: "for each node, what is the sum of values
+# coming from my IN-neighbours (the nodes that point at me)?"
+```
+
+---
+
+## Section 3: Matrix multiplication and paths
+
+`A^n` counts **walks** of length `n`: `(A^n)[i, j]` is the number of length-`n` walks from `i` to `j`. This single fact powers:
+
+- counting nodes reachable in at most `k` steps,
+- counting triangles,
+- the local clustering coefficient.
+
+### 3.1 Walks of length 1, 2 and 3
+
+We compute `A`, `A^2`, `A^3` on the directed network.
+
+`(A + A^2 + A^3) > 0` is the "can I reach node `j` from `i` in 1, 2 or 3 steps?" matrix.
+
+```{r}
+#| label: c-walks-plot
+plot_network(G_dir)
+```
+
+```{r}
+#| label: c-walks
+# Powers of A count walks of fixed length.
+# Combine paths of length 1, 2 and 3, then count reachable nodes.
+A <- as_adjacency_matrix(G_dir, sparse = FALSE)
+M <- (A + A %*% A + A %*% A %*% A) > 0  # count reachable nodes once
+diag(M) <- FALSE                        # subtract yourself
+reachable_le_3 <- rowSums(M)            # sum all nodes reachable
+
+tibble(person = V(G_dir)$name, `reachable within 3 steps` = reachable_le_3)
+```
+
+### 3.2 Triangles
+
+The diagonal of `A^3` counts closed walks of length 3 — i.e. triangles, with multiplicity. For an **undirected** simple graph each triangle is counted **6 times** in `trace(A^3)` (3 vertices x 2 directions), so the total number of triangles is `trace(A^3) / 6`.
+
+Compare with `cliques(g, min = 3, max = 3)`.
+
+```{r}
+#| label: c-triangles
+# For undirected graphs, trace(A^3) / 6 counts triangles.
+A <- as_adjacency_matrix(G_undir, sparse = FALSE)
+n_tri_matrix <- as.integer(sum(diag(A %*% A %*% A)) / 6)
+n_tri_igraph <- length(cliques(G_undir, min = 3, max = 3))
+cat(sprintf("Triangles via matrix : %d\n", n_tri_matrix))
+cat(sprintf("Triangles via igraph : %d\n", n_tri_igraph))
+```
+
+### 3.3 Local clustering coefficient
+
+The local clustering coefficient of node `i` is
+
+```
+C_i = (triangles through i) / (number of pairs of neighbours of i)
+    = (A^3)[i, i] / 2     /     ( k_i * (k_i - 1) / 2 )
+```
+
+Compare to `transitivity(g, type = "local")`.
+
+```{r}
+#| label: c-clustering
+# Local clustering compares actual triangles to possible triangles.
+A <- as_adjacency_matrix(G_undir, sparse = FALSE)
+tri <- diag(A %*% A %*% A) / 2
+degree_u <- rowSums(A)
+potential <- degree_u * (degree_u - 1) / 2
+C_manual <- tri / potential
+C_igraph <- transitivity(G_undir, type = "local", isolates = "zero")
+
+tibble(
+  node          = V(G_undir)$name,
+  triangles     = tri,
+  potential     = potential,
+  `C (manual)`  = round(C_manual, 3),
+  `C (igraph)`  = round(C_igraph, 3)
+)
+```
+
+---
+
+## Section 4: Node centrality
+
+Centrality measures try to capture, in a single number, **how important** a node is. They disagree because they answer different questions:
+
+| Measure          | Question it answers                                                    |
+|------------------|------------------------------------------------------------------------|
+| **Degree**       | How many direct connections do I have?                                 |
+| **Closeness**    | How short is my average distance to everyone else?                     |
+| **Betweenness**  | How often do I sit on a shortest path between two other nodes?         |
+| **Eigenvector**  | How well-connected are my neighbours (recursively)?                    |
+| **PageRank**     | Like eigenvector, but for directed networks and with a damping factor. |
+| **Harmonic**     | Closeness that gracefully handles disconnected components.             |
+
+### 4.1 Florentine families network
+
+We load the classic Florentine marriage network. NetworkX ships it as a convenience constructor; in R it comes with the `network` package (Padgett's data) as an adjacency matrix.
+
+```{r}
+#| label: c-flo-load
+# Load the Florentine families network (drop the isolated Pucci family,
+# like networkx's florentine_families_graph()).
+data(flo, package = "network")
+G_flo <- graph_from_adjacency_matrix(flo, mode = "undirected")
+G_flo <- delete_vertices(G_flo, degree(G_flo) == 0)
+cat(sprintf("Florentine: n = %d, m = %d\n", vcount(G_flo), ecount(G_flo)))
+cat("Families:", V(G_flo)$name, "\n")
+```
+
+### 4.2 Compute the five centralities
+
+We collect them in a data frame for inspection.
+
+```{r}
+#| label: c-flo-centralities
+# Compute several centralities and compare rankings.
+cent <- tibble(
+  family      = V(G_flo)$name,
+  degree      = degree(G_flo),
+  closeness   = closeness(G_flo),
+  betweenness = betweenness(G_flo),
+  eigenvector = eigen_centrality(G_flo)$vector,
+  pagerank    = page_rank(G_flo)$vector,
+  harmonic    = harmonic_centrality(G_flo)
+)
+
+sort_by <- "betweenness"  # try: "degree", "closeness", "eigenvector", "pagerank"
+cent |>
+  arrange(desc(.data[[sort_by]])) |>
+  mutate(across(where(is.numeric), \(v) round(v, 3)))
+```
+
+### 4.3 Visualise each centrality on the network
+
+The node size and colour both encode the centrality value, so you can scan the picture and spot the "winners".
+
+```{r}
+#| label: c-flo-plot
+# Small change to try: set `centrality_to_plot <- "degree"`.
+centrality_to_plot <- "betweenness"
+vals <- cent[[centrality_to_plot]]
+plot_network(G_flo, values = vals,
+             main = paste("Florentine families -", centrality_to_plot, "centrality"))
+```
+
+---
+
+## Section 5: Centrality on real networks
+
+### 5.1 Twitter network (`ic2s2_netsci_3.tsv`)
+
+Load the directed Twitter network and report the top nodes by closeness, betweenness, PageRank and hub/authority score (HITS).
+
+```{r}
+#| label: c-twitter-cent
+df <- read_tsv(file.path(path_data, "ic2s2_netsci_3.tsv"), show_col_types = FALSE)
+G_tw <- graph_from_data_frame(df[, c("source", "target")], directed = TRUE)
+G_tw <- simplify(G_tw, remove.multiple = FALSE, remove.loops = TRUE)
+cat(sprintf("Twitter network: n = %d, m = %d\n", vcount(G_tw), ecount(G_tw)))
+
+names_tw <- V(G_tw)$name
+
+top_n_tbl <- function(values, names_v, label, n = 15) {
+  tibble(name = names_v, !!label := values) |>
+    slice_max(.data[[label]], n = n)
+}
+
+hits <- hits_scores(G_tw)
+cc <- top_n_tbl(closeness(G_tw, mode = "all"),           names_tw, "closeness")
+bc <- top_n_tbl(betweenness(G_tw, directed = TRUE),      names_tw, "betweenness")
+pr <- top_n_tbl(page_rank(G_tw, directed = TRUE)$vector, names_tw, "pagerank")
+hb <- top_n_tbl(hits$hub,                                names_tw, "hub_score")
+ab <- top_n_tbl(hits$authority,                          names_tw, "authority_score")
+
+list(cc, bc, pr, hb, ab) |>
+  Reduce(\(a, b) full_join(a, b, by = "name"), x = _) |>
+  arrange(desc(authority_score))
+```
+
+### 5.2 Protein-protein interaction network
+
+Same exercise on the yeast PPI network. The top nodes by closeness/betweenness/eigenvector tend to be hub proteins central to cellular machinery.
+
+> `YLR291C` is a known hub: it is involved in regulation of translational initiation.
+
+```{r}
+#| label: c-ppi-cent
+G_ppi <- read_graph(file.path(path_data, "ppi_network_prediction.graphml"),
+                    format = "graphml")
+G_ppi <- as_undirected(G_ppi, mode = "collapse")
+# Use the "label" attribute as the node name if available
+if ("label" %in% vertex_attr_names(G_ppi)) V(G_ppi)$name <- V(G_ppi)$label
+cat(sprintf("PPI: n = %d, m = %d\n", vcount(G_ppi), ecount(G_ppi)))
+
+names_ppi <- V(G_ppi)$name
+
+cc_p <- top_n_tbl(degree(G_ppi),                    names_ppi, "degree")
+bc_p <- top_n_tbl(betweenness(G_ppi),               names_ppi, "betweenness")
+ec_p <- top_n_tbl(eigen_centrality(G_ppi)$vector,   names_ppi, "eigenvector")
+
+list(cc_p, bc_p, ec_p) |>
+  Reduce(\(a, b) full_join(a, b, by = "name"), x = _)
+```
+
+### 5.3 Discussion
+
+Look at the rankings above and discuss with your neighbour, in the Twitter network:
+
+- **Who would you choose to spread news quickly** (assuming the news is *always* passed on)?
+- **Who connects different communities** (acts as a bridge between groups)?
+- **Who would be best for spreading unreliable news** (assuming the news is sometimes *not* passed on)?
+
+There are no single right answers. The answers depend on which centrality you trust for each question, and that is exactly the point of having more than one.
+
+---
+
+## Section 6: Eigenvector centrality and PageRank, by hand
+
+[advanced, only if you love math]
+
+### Scaffold A — the idea
+
+Eigenvector centrality is built on a simple, almost circular, idea:
+
+> **A node is important if its neighbours are important.**
+
+That sounds like we're chasing our own tail, but watch what happens when we turn it into an equation.
+
+### Scaffold B — turning the idea into a formula
+
+Call each node's importance `x_i`. The statement *"my importance is the sum of my neighbours' importances"* reads:
+
+$$ x_i = \sum_j{A_{i, j}  x_j} $$
+
+In vector form, that's `x = A x`. Almost an eigenvector equation, but `A x` will keep growing (or shrinking) every time we apply `A`, so to keep magnitudes stable we normalise:
+
+`x = (A x) / λ`
+
+where λ is just a normalising constant. Rearranging:
+
+`A x = λ x`
+
+That **is** the eigenvalue equation. The eigenvector of `A` with the largest eigenvalue λ is exactly what we call **eigenvector centrality**.
+
+### Scaffold C — the power method
+
+You don't need to call an eigensolver to find `x`. Start with `x = (1, 1, …, 1)` and repeat:
+
+```
+x  <-  A %*% x
+x  <-  x / norm(x)
+```
+
+After enough iterations `x` converges to the dominant eigenvector. That repeated multiply-and-normalise is the **power method**.
+
+### 6.1 Eigenvector centrality with the power method
+
+We run the power method on `G_undir` and print the result side-by-side with `eigen_centrality()`.
+
+```{r}
+#| label: c-power-eig
+# Watch the power method converge.
+A_u <- as_adjacency_matrix(G_undir, sparse = FALSE)
+N   <- vcount(G_undir)
+
+n <- 20
+
+x <- rep(1, N)
+rows <- matrix(NA_real_, nrow = n, ncol = N)
+for (i in seq_len(n)) {
+  x <- as.numeric(A_u %*% x)
+  x <- x / sqrt(sum(x^2))
+  rows[i, ] <- round(x, 3)
+}
+
+iter_df <- as.data.frame(rows)
+colnames(iter_df) <- V(G_undir)$name
+rownames(iter_df) <- paste("iter", seq_len(n))
+
+reference <- eigen_centrality(G_undir)$vector
+reference <- reference / sqrt(sum(reference^2))
+iter_df["igraph", ] <- round(reference, 3)
+iter_df
+```
+
+### 6.2 PageRank with the power method
+
+For PageRank we
+
+1. row-normalise the adjacency matrix: `A_hat = D^(-1) A`,
+2. mix in a teleportation term with damping factor `d = 0.85`: `M = d * A_hat + (1 - d) / N`,
+3. iterate `x <- x %*% M` until convergence (note: row-stochastic, so we left-multiply).
+
+```{r}
+#| label: c-pagerank
+# PageRank is a random walk plus teleportation.
+# Small change to try: set `damping <- 0.50` and compare the result.
+A <- as_adjacency_matrix(G_dir, sparse = FALSE)
+N <- vcount(G_dir)
+damping <- 0.85
+
+deg_out <- rowSums(A)
+D <- diag(1 / ifelse(deg_out > 0, deg_out, 1))
+A_h <- D %*% A
+
+x <- rep(1 / N, N)
+for (i in 1:100) {
+  x <- as.numeric(x %*% (damping * A_h + (1 - damping) / N))
+}
+
+ref <- page_rank(G_dir, damping = damping)$vector
+tibble(person = V(G_dir)$name,
+       manual = round(x, 4),
+       igraph = round(ref, 4))
+```
+
+### 6.3 Random walker on an undirected graph ≈ degree centrality
+
+If you let a random walker bounce around an undirected graph forever, the fraction of time it spends at node `i` is proportional to its **degree**. That's why on undirected graphs PageRank (without damping) reduces to degree centrality.
+
+```{r}
+#| label: c-randomwalk
+# On an undirected graph, long-run random-walk visits track degree.
+A <- as_adjacency_matrix(G_undir, sparse = FALSE)
+N <- vcount(G_undir)
+D <- diag(1 / pmax(rowSums(A), 1))
+A_h <- D %*% A
+
+x <- rep(1 / N, N)
+for (i in 1:100) {
+  x <- as.numeric(x %*% A_h)
+}
+
+x <- x / sqrt(sum(x^2))
+deg <- as.numeric(degree(G_undir))
+deg <- deg / sqrt(sum(deg^2))
+tibble(person = V(G_undir)$name,
+       `random-walker`       = round(x, 4),
+       `degree (normalised)` = round(deg, 4))
+```
+
+---
+
+## Section 7: Centrality side-by-side
+
+Different centralities crown different nodes as "most important". To make that concrete, here is the **same** Florentine network drawn four times, with nodes sized by four different centralities. The same Fruchterman-Reingold layout is used in each panel so you can compare positions at a glance.
+
+```{r}
+#| label: c-sidebyside
+#| fig-width: 10
+#| fig-height: 9
+set.seed(1)
+layout_flo <- layout_with_fr(G_flo)
+names_flo <- V(G_flo)$name
+
+centralities <- list(
+  degree      = as.numeric(degree(G_flo)),
+  betweenness = as.numeric(betweenness(G_flo)),
+  closeness   = as.numeric(closeness(G_flo)),
+  eigenvector = as.numeric(eigen_centrality(G_flo)$vector)
+)
+
+op <- par(mfrow = c(2, 2), mar = c(1, 1, 3, 1))
+for (cname in names(centralities)) {
+  vals <- centralities[[cname]]
+  span <- max(vals) - min(vals)
+  if (span < 1e-12) span <- 1
+  sizes <- 10 + 22 * (vals - min(vals)) / span
+
+  # Continuous color encoding (coolwarm), consistent with plot_network() above
+  colors <- value_to_color(vals)
+
+  # Mark the top node with a thicker frame so it stands out at a glance
+  top <- which.max(vals)
+  frame_widths <- rep(0.5, vcount(G_flo)); frame_widths[top] <- 3
+  frame_colors <- rep("#444444", vcount(G_flo)); frame_colors[top] <- "#191716"
+
+  plot(G_flo, layout = layout_flo,
+       vertex.size = sizes, vertex.color = colors,
+       vertex.frame.color = frame_colors, vertex.frame.width = frame_widths,
+       edge.color = "lightgray",
+       vertex.label = names_flo, vertex.label.cex = 0.6,
+       vertex.label.color = "#191716",
+       main = sprintf("%s  (top: %s)", cname, names_flo[top]))
+}
+par(op)
+mtext("Florentine families - four centralities, one layout", side = 3, line = -1.5,
+      outer = TRUE, cex = 0.9)
+```
+
+**Take-away.** The Medici rank highest on most centrality measures, echoing their historical dominance. But the Strozzi move up or down depending on the metric: they have many connections and strong local clustering, yet sit off-center in the network, which lowers their betweenness.
+
+Same network, different measures, different "winners" — which is why we use more than one measure of centrality.

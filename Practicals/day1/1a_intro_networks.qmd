@@ -1,0 +1,848 @@
+---
+title: "1a. Introduction to Network Science (R / igraph edition)"
+format:
+  html:
+    toc: true
+    toc-depth: 2
+    code-fold: false
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+---
+
+# 1a. Introduction to Network Science
+
+Welcome to the first practical of the Network Science Summer School!
+
+## Learning objectives
+By the end of this notebook you will be able to:
+
+1. Recognise the most common file formats for network data and load them with `igraph`.
+2. Build a network from an adjacency list (e.g. a TSV file), and a GraphML file.
+3. Visualise networks using different layouts and visual encodings.
+4. Describe a network with summary statistics (components, diameter, density, clustering, assortativity, robustness).
+5. Plot degree, triangle, clustering and path-length distributions.
+6. Compare an observed metric against random reference models (ER, configuration, Barabasi-Albert) and run a permutation test for attribute assortativity.
+
+## Section index
+
+- **Section 0**: Setup
+- **Section 1**: Network data formats
+- **Section 2**: Build a network from raw data
+- **Section 3**: Visualizing networks
+- **Section 4**: Describing networks
+- **Section 5**: Distributions
+- **Section 6**: Reference models and permutation test
+
+## Section 0: Setup
+
+```{r}
+#| label: c-install
+# If you are missing packages, install them by uncommenting:
+# install.packages(c("igraph", "dplyr", "readr", "tidyr", "ggplot2", "network"))
+```
+
+```{r}
+#| label: c-path
+# Path to the data folder (relative to this .qmd file)
+path_data <- "../../../Data/"
+```
+
+```{r}
+#| label: c-setup
+# Core libraries
+library(igraph)     # Primary network library for this practical
+library(dplyr)      # Data manipulation
+library(readr)      # Reading CSV / TSV files
+library(tidyr)      # Reshaping data
+library(ggplot2)    # Plotting
+
+# Visual style for the whole notebook
+palette_ns <- c("#3d348b", "#e6af2e", "#191716", "#e0e2db")
+theme_set(
+  theme_minimal(base_size = 13) +
+    theme(
+      panel.grid.minor = element_blank(),
+      panel.grid.major = element_line(color = "lightgray"),
+      axis.text   = element_text(color = "#484848"),
+      axis.title  = element_text(color = "#484848"),
+      plot.title  = element_text(color = "#484848", hjust = 0),
+      legend.position = "right"
+    )
+)
+
+# Reproducibility seed (igraph layouts and random graphs use R's RNG)
+set.seed(1)
+```
+
+---
+
+## Section 1: Network data formats
+
+A network is, fundamentally, just a list of who-relates-to-whom. The same network can be stored on disk in many different formats. In this section we look at the four formats you are most likely to encounter:
+
+| Format | Extension | Best for |
+|--------|-----------|----------|
+| Edgelist | `.csv`, `.tsv`, `.txt` | Sharing, scraping, quick imports |
+| Adjacency matrix | `.csv`, `.rds` | Linear-algebra views, small dense graphs |
+| GraphML / GML / Pajek | `.graphml`, `.gml`, `.net` | Keeping node/edge attributes, interop with Gephi, Cytoscape, Python |
+| JSON | `.json` | Web visualisations (d3.js, vis.js, cytoscape.js) |
+
+### 1.1 Edgelist (CSV / TSV)
+
+The most human-readable way to describe a network: each row is one edge.
+
+```
+source,target
+Alice,Bob
+Alice,Carol
+Bob,Dave
+...
+```
+
+In `igraph` we typically build a graph from an edgelist stored in a data frame using `graph_from_data_frame()`.
+
+```{r}
+#| label: c-toy-edgelist
+# Small change to try: add one extra pair to `edges_df` and rerun.
+edges_df <- tibble(
+  source = c("Alice", "Alice", "Bob",  "Carol", "Dave", "Eve"),
+  target = c("Bob",   "Carol", "Dave", "Dave",  "Eve",  "Frank")
+)
+
+# Showing the edge list as a data frame
+edges_df
+
+# Creating the network from an edgelist
+g_toy <- graph_from_data_frame(edges_df, directed = FALSE)
+
+# Printing the number of nodes (vcount) and edges (ecount)
+cat("Nodes:", V(g_toy)$name, "\n")
+cat(sprintf("n = %d, m = %d\n", vcount(g_toy), ecount(g_toy)))
+```
+
+### 1.2 Adjacency matrix view
+
+The same network can be written as a square 0/1 matrix where `A[i, j] = 1` iff there is an edge between node `i` and node `j`. This view is convenient for linear algebra and spectral methods.
+
+```{r}
+#| label: c-toy-adjacency-sparse
+## Sparse matrix (what igraph returns by default)
+A <- as_adjacency_matrix(g_toy)
+print(A)
+```
+
+```{r}
+#| label: c-toy-adjacency-dense
+# Dense adjacency matrix (small networks only!)
+A <- as_adjacency_matrix(g_toy, sparse = FALSE)
+print(A)
+
+# Plot as a heatmap
+image(
+  seq_len(ncol(A)), seq_len(nrow(A)), t(A)[, nrow(A):1],
+  col = c("white", "#3d348b"),
+  axes = FALSE, xlab = "", ylab = "",
+  main = "Adjacency matrix of the toy network"
+)
+axis(1, at = seq_len(ncol(A)), labels = colnames(A), las = 2)
+axis(2, at = seq_len(nrow(A)), labels = rev(rownames(A)), las = 1)
+```
+
+### 1.3 Interchange formats: GraphML, GML, Pajek, JSON
+
+When you want to keep **node and edge attributes** (labels, weights, types, positions, ...) alongside the edges, a plain CSV is no longer enough. The most common richer formats are:
+
+- **GraphML** (`.graphml`): XML-based, very widely supported (Gephi, Cytoscape, networkx, igraph).
+- **GML** (`.gml`): Simpler text format, used historically by Pajek and many classic datasets.
+- **JSON** (e.g. node-link JSON): The format of choice for web visualisations.
+
+`igraph` reads all of these out of the box via `read_graph()`.
+
+EXERCISE:
+
+* Open `medici.gml` and `ppi_network_prediction.graphml` in a text editor.
+* Explore the code below
+
+```{r}
+#| label: c-load-gml-graphml
+g_gml     <- read_graph(file.path(path_data, "medici.gml"), format = "gml")
+g_graphml <- read_graph(file.path(path_data, "ppi_network_prediction.graphml"),
+                        format = "graphml")
+
+cat(sprintf("medici.gml : n = %d, m = %d\n", vcount(g_gml), ecount(g_gml)))
+cat(sprintf("ppi.graphml: n = %d, m = %d\n", vcount(g_graphml), ecount(g_graphml)))
+cat("GraphML vertex attributes:", vertex_attr_names(g_graphml), "\n")
+
+# Writing to a different format is also easy
+tmp_path <- tempfile(fileext = ".graphml")
+write_graph(g_gml, tmp_path, format = "graphml")
+```
+
+```{r}
+#| label: c-gml-dataframes
+# You can see the adjacency list
+head(igraph::as_data_frame(g_gml, what = "edges"))
+
+# and the node properties
+head(igraph::as_data_frame(g_gml, what = "vertices"))
+```
+
+---
+
+## Section 2: Build real networks
+
+### 2.1 From a data frame (Google Sheets URL)
+
+We collected a small network during the warm-up game. The data lives in a Google Sheet, published as CSV. We can read it straight into R and convert to an `igraph` graph.
+
+Network here: <https://tinyurl.com/network-game>
+
+```{r}
+#| label: c-game
+# Load an edgelist and turn it into a graph.
+# Small change to try: set `show_labels <- FALSE` if the labels overlap.
+url <- "https://docs.google.com/spreadsheets/d/e/2PACX-1vSuZC86KjXYKSPr0Nw7mfRha4zwea3aMw-gTKliVcbRt_m3NRiCEyxbH_d5M8MBL0LWayg1WDmnqBET/pub?gid=0&single=true&output=csv"
+show_labels <- TRUE
+
+# read edgelist (falls back to a small edgelist if you are offline)
+df <- tryCatch(
+  read_csv(url, show_col_types = FALSE),
+  error = function(e) tibble(P1 = c("A", "B", "C"), P2 = c("B", "C", "A"))
+)
+edge_columns <- c("P1", "P2")
+head(df)
+
+# convert to igraph
+G_game <- graph_from_data_frame(df[, edge_columns], directed = FALSE)
+cat(sprintf("n = %d, m = %d\n", vcount(G_game), ecount(G_game)))
+
+# Visualize
+set.seed(1)
+plot(G_game,
+     layout = layout_with_fr(G_game),
+     vertex.size = 6, vertex.color = "#e6af2e",
+     edge.color = "lightgray",
+     vertex.label = if (show_labels) V(G_game)$name else NA,
+     vertex.label.cex = 0.6, vertex.label.color = "#191716",
+     main = "Network game edgelist")
+```
+
+### 2.2 Twitter network (TSV edgelist)
+
+`ic2s2_netsci_3.tsv` is a small mention/reply/retweet network collected around the IC2S2 and NetSci conferences. It is a plain TSV with `source` and `target` columns.
+
+```{r}
+#| label: c-twitter
+# Small change to try: switch `directed` to TRUE and compare n/m.
+directed <- FALSE
+df_tw <- read_tsv(file.path(path_data, "ic2s2_netsci_3.tsv"),
+                  show_col_types = FALSE)
+head(df_tw)
+
+G_twitter <- graph_from_data_frame(df_tw[, c("source", "target")],
+                                   directed = directed)
+G_twitter <- simplify(G_twitter, remove.multiple = FALSE, remove.loops = TRUE)
+cat(sprintf("Twitter: n = %d, m = %d\n", vcount(G_twitter), ecount(G_twitter)))
+
+set.seed(1)
+plot(G_twitter,
+     layout = layout_with_fr(G_twitter),
+     vertex.size = 3, vertex.color = "#3d348b",
+     vertex.label = NA,
+     edge.color = "lightgray", edge.width = 0.3,
+     main = "Twitter network around IC2S2 NetSci")
+```
+
+### 2.3 Protein-Protein Interaction (PPI) network (GraphML)
+
+`ppi_network_prediction.graphml` is a small yeast Protein-Protein Interaction network. Because it is already a GraphML file, we get nodes and attributes for free.
+
+```{r}
+#| label: c-ppi
+# Read the network
+G_ppi <- read_graph(file.path(path_data, "ppi_network_prediction.graphml"),
+                    format = "graphml")
+G_ppi <- as_undirected(G_ppi, mode = "collapse")
+cat(sprintf("PPI: n = %d, m = %d\n", vcount(G_ppi), ecount(G_ppi)))
+
+set.seed(1)
+plot(G_ppi,
+     layout = layout_with_fr(G_ppi),
+     vertex.size = 2, vertex.color = "#3d348b",
+     vertex.label = NA,
+     edge.color = "lightgray", edge.width = 0.3,
+     main = "Yeast PPI network")
+```
+
+---
+
+> **Bring your own data**
+>
+> The patterns above (load a CSV -> build a graph -> visualise) work for **any** edgelist. If you brought your own data, this is a good moment to load it:
+>
+> 1. Save your edges as a 2-column CSV with header `source,target`.
+> 2. Use the pattern from Section 2.1 to read it.
+> 3. Visualise it with `plot()`.
+>
+> Try this with your own network before moving on.
+
+```{r}
+#| label: c-byod
+# (Optional) Paste your own loading code below
+# G_mine <- graph_from_data_frame(read_csv("my_data.csv"), directed = FALSE)
+```
+
+---
+
+## Section 3: Visualizing networks
+
+A good plot of a network can be incredibly illuminating - and a bad plot can be actively misleading. The same graph can look completely different depending on the layout algorithm.
+
+### 3.1 The hairball problem
+
+When a network has thousands of edges, layouts produce an unreadable blob (a "hairball"). Let's see this with the Wikipedia voting network.
+
+```{r}
+#| label: c-wiki
+# Load the Wiki-Vote edgelist and plot it.
+# Small change to try: change `layout_with_fr()` to `layout_randomly()`.
+# Load directed Wiki-Vote network (the file starts with comment lines: #)
+df_wiki <- read.table(file.path(path_data, "wiki-Vote.txt"),
+                      header = FALSE, sep = "\t", comment.char = "#",
+                      col.names = c("source", "target"))
+G_wiki <- graph_from_data_frame(df_wiki, directed = TRUE)
+
+# Keep only the largest weakly connected component
+# (otherwise unconnected components fly away)
+comps_wiki <- components(G_wiki, mode = "weak")
+G_lcc <- induced_subgraph(G_wiki,
+                          which(comps_wiki$membership == which.max(comps_wiki$csize)))
+
+# Plot with a force-directed layout
+set.seed(1)
+plot(G_lcc,
+     layout = layout_with_fr(G_lcc),
+     vertex.size = 1, vertex.color = "#3d348b",
+     vertex.label = NA,
+     edge.color = "lightgray", edge.width = 0.05, edge.arrow.size = 0)
+```
+
+### 3.2 Visual encoding: size and colour carry information
+
+A plain plot of a network only shows connectivity. By mapping **node size** to a centrality measure and **node colour** to a community label, we can pack much more information into the same chart.
+
+We use the Karate club network (small enough to see every label).
+
+```{r}
+#| label: c-karate
+# Karate club: built into igraph as the "Zachary" graph.
+# (The Python version loads it from networkx; here we attach the club
+#  factions by hand, since make_graph("Zachary") has no attributes.)
+G_kar <- make_graph("Zachary")
+mr_hi_members <- c(1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 13, 14, 17, 18, 20, 22)
+V(G_kar)$club <- ifelse(seq_len(vcount(G_kar)) %in% mr_hi_members,
+                        "Mr. Hi", "Officer")
+
+cat(sprintf("Karate club: n = %d, m = %d\n", vcount(G_kar), ecount(G_kar)))
+
+degrees <- degree(G_kar)
+layout_kar <- layout_with_kk(G_kar)
+
+# Color by real club/faction
+node_colors <- ifelse(V(G_kar)$club == "Mr. Hi", palette_ns[1], palette_ns[2])
+
+# Label only the two key nodes: 1 = Mr. Hi, 34 = Officer
+node_labels <- rep("", vcount(G_kar))
+node_labels[1]  <- "Mr. Hi"
+node_labels[34] <- "Officer"
+
+op <- par(mfrow = c(1, 2), mar = c(1, 1, 3, 1))
+
+# Left: default network
+plot(G_kar, layout = layout_kar, main = "Default network")
+
+# Right: faction colors, degree sizes, leader labels
+plot(G_kar, layout = layout_kar,
+     vertex.color = node_colors,
+     vertex.size = 5 + degrees,
+     vertex.label = node_labels,
+     vertex.label.cex = 1.1, vertex.label.color = "#191716",
+     vertex.frame.color = NA,
+     edge.color = "gray",
+     main = "Karate club factions")
+par(op)
+```
+
+### 3.4 Visualisation do's and don'ts
+
+**Do**
+
+- Think first about the **main message** you want to communicate. The other points below are contingent on that message.
+- Map **node size** to importance (degree, centrality, frequency).
+- Map **node colour** to a categorical attribute (community, type, label).
+- Use **edge alpha** or thin edges to reduce clutter.
+- Pick a **layout** that fits your message (force-directed, circular, hierarchical, ...).
+- Label only the **most central** or most interesting nodes.
+
+**Don't**
+
+- Plot a 10-000 node hairball and call it a visualisation.
+- Trust the *exact* positions of force-directed layouts - only relative positions are meaningful.
+
+---
+
+## Section 4: Describing networks
+
+Once we have a graph, we want **numbers** that summarise its structure. In this section we compute the classical descriptive statistics on the PPI network and compare to the Twitter network (or your network)
+
+```{r}
+#| label: c-pick-graph
+# Small change to try: set `network_choice <- "ppi"` after finishing Twitter.
+network_choice <- "twitter"  # options: "ppi", "twitter"
+g <- if (network_choice == "ppi") G_ppi else G_twitter
+cat(sprintf("Working network (%s): n = %d, m = %d\n",
+            network_choice, vcount(g), ecount(g)))
+```
+
+### 4.1 Connectedness
+
+A *connected component* is a maximal set of nodes such that any two are reachable from each other.
+
+```{r}
+#| label: c-components
+# Only function to notice: `components()`.
+comps <- components(g, mode = "weak")
+component_sizes <- sort(comps$csize, decreasing = TRUE)
+cat(sprintf("Number of components: %d\n", comps$no))
+cat("Sizes of the 20 largest components:", head(component_sizes, 20), "\n")
+
+g_lcc <- induced_subgraph(g, which(comps$membership == which.max(comps$csize)))
+cat(sprintf("Largest component: n = %d, m = %d\n", vcount(g_lcc), ecount(g_lcc)))
+```
+
+### 4.2 Diameter and average shortest path
+
+- **Diameter**: the longest shortest path between any pair of nodes.
+- **Average shortest path**: the mean over all pairs.
+
+Many real-world networks have *very* short paths between nodes ("small world").
+
+```{r}
+#| label: c-diameter
+cat(sprintf("Diameter            : %d\n", diameter(g_lcc)))
+cat(sprintf("Average path length : %.3f\n", mean_distance(g_lcc)))
+```
+
+### 4.3 Density
+
+Density = (edges present) / (edges possible). Most real networks are extremely sparse.
+
+```{r}
+#| label: c-density
+cat(sprintf("Density: %.5f\n", edge_density(g_lcc)))
+```
+
+### 4.4 Transitivity and average clustering
+
+- **Global transitivity** = 3 x (#triangles) / (#connected triples). The "ratio of closed triangles".
+- **Average local clustering** = mean local clustering coefficient over nodes.
+
+The two can differ a lot in heterogeneous networks.
+
+```{r}
+#| label: c-transitivity
+# Two ways to summarise triangle closure.
+# The arguments to notice are `type = "global"` and `type = "average"`.
+cat(sprintf("Global transitivity        : %.4f\n",
+            transitivity(g_lcc, type = "global")))
+cat(sprintf("Average local clustering   : %.4f\n",
+            transitivity(g_lcc, type = "average", isolates = "zero")))
+```
+
+### 4.5 Degree assortativity
+
+Are high-degree nodes connected to other high-degree nodes (assortative, > 0) or to low-degree ones (disassortative, < 0)?
+
+```{r}
+#| label: c-assortativity
+# Degree assortativity asks whether high-degree nodes connect to high-degree nodes.
+cat(sprintf("Degree assortativity: %.4f\n", assortativity_degree(g_lcc)))
+```
+
+### 4.6 Robustness to failures vs. fragility to targeted attacks
+
+We remove nodes one at a time, either:
+
+- **targeted**: highest-degree node first (think: a smart adversary),
+- **random**: uniformly at random (think: random failures).
+
+After each removal we track the share of nodes still in the giant component.
+
+```{r}
+#| label: c-attack
+# Small changes to try: lower/raise `n_remove`.
+attack_network <- function(g_in, how = "targeted", n_remove = 200, seed = 0) {
+  set.seed(seed)
+  g2 <- g_in
+  shares <- numeric(n_remove)
+  for (i in seq_len(n_remove)) {
+    if (vcount(g2) <= 1) {
+      shares[i] <- 0
+      next
+    }
+    node_idx <- if (how == "targeted") which.max(degree(g2))
+                else sample.int(vcount(g2), 1)
+    g2 <- delete_vertices(g2, node_idx)
+    cc <- components(g2, mode = "weak")
+    biggest <- if (cc$no > 0) max(cc$csize) else 0
+    shares[i] <- 100 * biggest / max(vcount(g2), 1)
+  }
+  shares
+}
+
+n_remove <- if (network_choice == "ppi") 200 else 1000
+# Random network (Erdos Renyi = connections are created randomly), as baseline
+set.seed(1)
+G_er <- sample_gnm(n = vcount(g), m = ecount(g), directed = FALSE, loops = FALSE)
+er_comps <- components(G_er, mode = "weak")
+G_er <- induced_subgraph(G_er, which(er_comps$membership == which.max(er_comps$csize)))
+
+# Attack the network and the baseline
+obs_targeted <- attack_network(g,    how = "targeted", n_remove = n_remove, seed = 1)
+obs_random   <- attack_network(g,    how = "random",   n_remove = n_remove, seed = 2)
+er_targeted  <- attack_network(G_er, how = "targeted", n_remove = n_remove, seed = 3)
+er_random    <- attack_network(G_er, how = "random",   n_remove = n_remove, seed = 4)
+
+# Plot (tidy style: long data frame + facets)
+attack_df <- tibble(
+  removed  = rep(100 * (seq_len(n_remove) - 1) / vcount(g), 4),
+  share    = c(obs_targeted, er_targeted, obs_random, er_random),
+  graph    = rep(rep(c("Observed network", "ER random graph"), each = n_remove), 2),
+  scenario = rep(c("Targeted attack", "Random failures"), each = 2 * n_remove)
+)
+
+ggplot(attack_df, aes(removed, share, color = graph)) +
+  geom_line(linewidth = 1) +
+  facet_wrap(~ scenario) +
+  scale_color_manual(values = palette_ns[1:2]) +
+  ylim(0, 100) +
+  labs(x = "Share of nodes removed (%)",
+       y = "Share in giant component (%)",
+       color = NULL)
+```
+
+### Comparison: PPI vs Twitter
+
+| Property | Twitter | PPI |
+|---------|---------|-----|
+| Connectedness | 1 component, 1554 nodes | ~106 components, 809 in largest |
+| Diameter | 6 (avg path 2.5) | 15 (avg path 5.6) |
+| Density | 4.4% | 0.35% |
+| Transitivity | 21% | 1.4% |
+| Avg. clustering | 35% | 3.5% |
+| Degree assortativity | 12.6% | -16.4% |
+| Robustness | fairly robust, breaks around 50% | fragile, breaks at ~5% |
+
+The Twitter network is much denser and much more clustered.
+
+---
+
+## Section 5: Distributions
+
+Summary statistics throw away a lot of information. Distributions over nodes reveal heterogeneity, hubs, and heavy tails. We work with the Florentine families network here because it is small enough to plot every node.
+
+```{r}
+#| label: c-flo-setup
+# Reuse the small Florentine network for node-level distributions.
+# Padgett's marriage network ships with the `network` package as an adjacency
+# matrix; we drop the isolated Pucci family, like networkx's
+# florentine_families_graph() in the Python version.
+data(flo, package = "network")
+G_flo <- graph_from_adjacency_matrix(flo, mode = "undirected")
+G_flo <- delete_vertices(G_flo, degree(G_flo) == 0)
+
+g_flo <- G_flo
+cat(sprintf("Florentine: n = %d, m = %d\n", vcount(g_flo), ecount(g_flo)))
+cat("Families:", V(g_flo)$name, "\n")
+```
+
+### 5.1 Degree distribution
+
+`degree(g)` returns a vector with one degree per node.
+
+```{r}
+#| label: c-degree-dist
+# Compare a histogram with a CCDF for degree.
+# Small change to try: set `ccdf_scale <- "linear"`.
+plot_ccdf <- function(values, xlabel = "Degree d", ylabel = "p(Degree > d)",
+                      scale = "log") {
+  df <- tibble(d = values) |>
+    count(d) |>
+    arrange(d) |>
+    mutate(ccdf = 1 - cumsum(n) / sum(n))
+  p <- ggplot(df, aes(d, ccdf)) +
+    geom_point(color = palette_ns[1]) +
+    geom_line(color = palette_ns[1]) +
+    labs(x = xlabel, y = ylabel)
+  if (scale == "log") p <- p + scale_x_log10() + scale_y_log10()
+  p
+}
+
+ccdf_scale <- "log"
+degree_values <- degree(g_flo)
+
+p_hist <- ggplot(tibble(d = degree_values), aes(d)) +
+  geom_histogram(binwidth = 1, fill = palette_ns[1]) +
+  labs(x = "Degree d", y = "# nodes", title = "Degree histogram")
+p_ccdf <- plot_ccdf(degree_values, scale = ccdf_scale) +
+  labs(title = "Degree CCDF")
+
+p_hist
+p_ccdf
+```
+
+### 5.2 Triangles per node
+
+`igraph` has a direct `count_triangles()` function, but we can also compute it cheaply from the adjacency matrix:
+
+> The number of triangles a node `i` participates in is `(A^3)[i, i] / 2`.
+
+```{r}
+#| label: c-triangles-per-node
+# Triangles through a node come from the diagonal of A^3.
+A_flo <- as_adjacency_matrix(g_flo, sparse = FALSE)
+A3 <- A_flo %*% A_flo %*% A_flo
+triangles_per_node <- as.integer(diag(A3) / 2)
+
+tibble(
+  family    = V(g_flo)$name,
+  triangles = triangles_per_node
+) |>
+  arrange(desc(triangles))
+```
+
+### 5.3 Local clustering coefficient
+
+`transitivity(g, type = "local")` returns one local clustering value per node.
+
+```{r}
+#| label: c-local-clustering
+# Local clustering is one value per node.
+local_clust <- transitivity(g_flo, type = "local", isolates = "zero")
+clust_df <- tibble(family = V(g_flo)$name, local_clustering = local_clust)
+clust_df |> arrange(desc(local_clustering))
+
+ggplot(clust_df, aes(local_clustering)) +
+  geom_histogram(bins = 10, fill = palette_ns[1]) +
+  labs(x = "Local clustering coefficient", y = "# nodes",
+       title = "Local clustering distribution")
+```
+
+### 5.4 Shortest path lengths
+
+`distances(g)` returns a full pairwise distance matrix. For large networks this is slow / memory-hungry.
+
+```{r}
+#| label: c-shortest-paths
+# Shortest paths are pairwise distances on the graph.
+dist_matrix <- distances(g_flo)
+mask <- is.finite(dist_matrix) & dist_matrix > 0
+all_dists <- dist_matrix[mask]
+cat(sprintf("Mean shortest path: %.3f\n", mean(all_dists)))
+cat(sprintf("Diameter (max)    : %d\n", as.integer(max(all_dists))))
+
+ggplot(tibble(d = all_dists), aes(d)) +
+  geom_histogram(binwidth = 1, fill = palette_ns[1]) +
+  labs(x = "Shortest path length", y = "# pairs",
+       title = "Distribution of shortest paths")
+```
+
+### 5.5 PDF, CDF and CCDF on log-log scale
+
+A power-law degree distribution looks like a straight line on a log-log CCDF plot. Let's compare the degree distributions of the Wiki, Twitter and PPI networks.
+
+```{r}
+#| label: c-distributions
+# PDF/CDF/CCDF show different views of the same degree sequence.
+# Small change to try: change `which_graph` to "wiki" or "ppi".
+plot_distributions <- function(d, title = "", scale = "log") {
+  df <- tibble(d = d) |>
+    count(d) |>
+    arrange(d) |>
+    mutate(
+      pdf  = n / sum(n),
+      cdf  = cumsum(pdf),
+      ccdf = 1 - cdf
+    ) |>
+    pivot_longer(c(pdf, cdf, ccdf), names_to = "stat", values_to = "p") |>
+    mutate(stat = factor(toupper(stat), levels = c("PDF", "CDF", "CCDF")))
+
+  p <- ggplot(df, aes(d, p)) +
+    geom_point(color = palette_ns[1], size = 0.8) +
+    facet_wrap(~ stat, nrow = 1) +
+    labs(x = "Degree d", y = NULL, title = title)
+  if (scale == "log") p <- p + scale_x_log10() + scale_y_log10()
+  p
+}
+
+which_graph <- "twitter"  # try: "wiki", "twitter", "ppi"
+graphs <- list(wiki = G_wiki, twitter = G_twitter, ppi = G_ppi)
+plot_distributions(degree(graphs[[which_graph]]),
+                   title = tools::toTitleCase(which_graph), scale = "log")
+```
+
+---
+
+## Section 6: Reference models and permutation test
+
+When we measure clustering = 0.19 on the Florentine network, the natural question is:
+
+> **Is 0.19 high? Compared to what?**
+
+The standard answer is to compare against a *reference model*: a random graph that preserves *some* property of the observed network (number of nodes, number of edges, degree sequence) but is otherwise random.
+
+### 6.1 Three reference models
+
+| Model | Preserves | igraph constructor |
+|-------|-----------|--------------------|
+| Erdos-Renyi (ER, `G(n, m)`) | n, m | `sample_gnm(n, m)` |
+| Configuration model | full degree sequence | `sample_degseq(deg, method = "vl")` |
+| Barabasi-Albert | preferential-attachment growth | `sample_pa(n, m, directed = FALSE)` |
+
+### 6.2 Visualise three reference graphs for the Florentine network
+
+```{r}
+#| label: c-refmodels-plot
+# Start with the Florentine network
+n_flo <- vcount(g_flo)
+m_flo <- ecount(g_flo)
+deg_seq <- degree(g_flo)
+
+# Create baselines
+G_er  <- sample_gnm(n = n_flo, m = m_flo, directed = FALSE, loops = FALSE)
+G_cfg <- sample_degseq(deg_seq, method = "vl")
+G_ba  <- sample_pa(n = n_flo, m = max(1, m_flo %/% n_flo), directed = FALSE)
+
+# Plot them
+set.seed(1)  # so the layout doesn't change if the network didn't change
+op <- par(mfrow = c(1, 4), mar = c(1, 1, 3, 1))
+for (item in list(list("Observed", g_flo), list("Erdos-Renyi", G_er),
+                  list("Configuration", G_cfg), list("Barabasi-Albert", G_ba))) {
+  gx <- item[[2]]
+  plot(gx,
+       layout = layout_with_fr(gx),
+       vertex.size = 8, vertex.color = "#3d348b",
+       vertex.label = NA,
+       edge.color = "lightgray",
+       main = sprintf("%s\nn=%d, m=%d", item[[1]], vcount(gx), ecount(gx)))
+}
+par(op)
+```
+
+### 6.3 Confidence-interval comparison
+
+We generate many random graphs of the same size, compute a metric on each, and compare the observed value to the 5%-95% percentile range.
+
+```{r}
+#| label: c-confint
+conf_int_ig <- function(g_obs, fun, iters = 100, model = "er", seed = 0) {
+  set.seed(seed)
+  n <- vcount(g_obs)
+  m <- ecount(g_obs)
+  deg_seq <- degree(g_obs)
+  vals <- numeric(iters)
+  for (i in seq_len(iters)) {
+    Gr <- switch(model,
+      er     = sample_gnm(n, m, directed = FALSE, loops = FALSE),
+      config = sample_degseq(deg_seq, method = "vl"),
+      ba     = sample_pa(n, max(1, m %/% n), directed = FALSE)
+    )
+    vals[i] <- fun(Gr)
+  }
+  quantile(vals[is.finite(vals)], probs = c(0.05, 0.95))
+}
+
+# small change: use assortativity_degree() instead
+observed <- transitivity(g_flo, type = "global")
+metric_fun <- function(G) transitivity(G, type = "global")
+
+cat(sprintf("Observed: %.3f\n", observed))
+for (model in c("er", "config", "ba")) {
+  ci <- conf_int_ig(g_flo, metric_fun, iters = 100, model = model, seed = 1)
+  cat(sprintf("  %-7s: [%.3f, %.3f]\n", model, ci[1], ci[2]))
+}
+```
+
+### 6.4 Permutation test for attribute assortativity
+
+The Florentine network can be annotated with a political faction: each family was either a **Medici** ally (`m`) or an **oligarch** (`o`). Do allied families marry each other more than chance would predict?
+
+We test this by permuting the labels many times and comparing the observed assortativity to the null distribution.
+
+```{r}
+#| label: c-permtest-setup
+# Attach a simple political faction label to each family.
+# Small change to try: change one family from "o" to "m" and rerun the test below.
+ns_labels <- c("Acciaiuoli", "Medici", "Castellani", "Peruzzi", "Strozzi",
+               "Barbadori", "Ridolfi", "Tornabuoni", "Albizzi", "Salviati",
+               "Pazzi", "Bischeri", "Guadagni", "Ginori", "Lamberteschi")
+classes <- c("m", "m", "o", "o", "o", "o", "o", "m", "m", "m", "o", "o", "o", "o", "o")
+name_to_class <- setNames(classes, ns_labels)
+V(g_flo)$faction <- coalesce(name_to_class[V(g_flo)$name], "o")
+
+faction_int <- ifelse(V(g_flo)$faction == "m", 0L, 1L)
+node_color  <- ifelse(V(g_flo)$faction == "m", "gray", "cornflowerblue")
+obs_assort  <- assortativity_nominal(g_flo, types = faction_int + 1, directed = FALSE)
+cat(sprintf("Observed attribute assortativity: %.4f\n", obs_assort))
+
+set.seed(0)
+plot(g_flo,
+     layout = layout_with_fr(g_flo),
+     vertex.color = node_color,
+     vertex.size = 14,
+     vertex.frame.color = NA,
+     vertex.label = V(g_flo)$name, vertex.label.cex = 0.7,
+     vertex.label.color = "#191716",
+     edge.color = "gray")
+```
+
+```{r}
+#| label: c-permtest-run
+# Permutation test for "is this assortativity surprising?"
+# Small change to try: set `iters <- 10000` for a smoother histogram.
+set.seed(0)
+iters <- 1000
+null_values <- numeric(iters)
+for (i in seq_len(iters)) {
+  permuted <- sample(faction_int)
+  null_values[i] <- assortativity_nominal(g_flo, types = permuted + 1,
+                                          directed = FALSE)
+}
+
+ggplot(tibble(x = null_values), aes(x)) +
+  geom_histogram(binwidth = 0.05, fill = palette_ns[4], color = "white") +
+  geom_vline(xintercept = obs_assort, linetype = "dashed",
+             color = palette_ns[1], linewidth = 1) +
+  annotate("text", x = obs_assort, y = Inf, hjust = -0.1, vjust = 2,
+           label = sprintf("observed = %.3f", obs_assort),
+           color = palette_ns[1]) +
+  labs(x = "Attribute assortativity under random labels",
+       y = "# permutations")
+
+p_value <- mean(null_values >= obs_assort)
+cat(sprintf("One-sided p-value (null >= observed): %.4f\n", p_value))
+```
+
+**Interpretation.** If the p-value is small (say < 0.05) we reject the null hypothesis that faction labels are independent of the marriage structure: families *did* preferentially marry within their political faction.
+
+---
+
+That's the end of practical 1a. You now have a working toolbox to:
+
+1. Load a network from any common format.
+2. Visualise it sensibly.
+3. Describe it with numbers.
+4. Plot its key distributions.
+5. Test whether what you observe is "surprising" against a reasonable null.
