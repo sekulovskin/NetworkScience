@@ -74,6 +74,22 @@ theme_set(
 
 # Reproducibility seed (igraph layouts and random graphs use R's RNG)
 set.seed(1)
+
+# NetworkX's florentine_families_graph() has a fixed 15-family order and
+# excludes the isolated Pucci family. This loader reproduces that graph in R.
+networkx_florentine_names <- c(
+  "Acciaiuoli", "Medici", "Castellani", "Peruzzi", "Strozzi",
+  "Barbadori", "Ridolfi", "Tornabuoni", "Albizzi", "Salviati",
+  "Pazzi", "Bischeri", "Guadagni", "Ginori", "Lamberteschi"
+)
+
+load_networkx_florentine <- function() {
+  data(flo, package = "network")
+  g <- graph_from_adjacency_matrix(flo, mode = "undirected", diag = FALSE)
+  g <- delete_vertices(g, degree(g) == 0)
+  g <- permute(g, order(match(networkx_florentine_names, V(g)$name)))
+  g
+}
 ```
 
 ---
@@ -556,14 +572,7 @@ Summary statistics throw away a lot of information. Distributions over nodes rev
 ```{r}
 #| label: c-flo-setup
 # Reuse the small Florentine network for node-level distributions.
-# Padgett's marriage network ships with the `network` package as an adjacency
-# matrix; we drop the isolated Pucci family, like networkx's
-# florentine_families_graph() in the Python version.
-data(flo, package = "network")
-G_flo <- graph_from_adjacency_matrix(flo, mode = "undirected")
-G_flo <- delete_vertices(G_flo, degree(G_flo) == 0)
-
-g_flo <- G_flo
+g_flo <- load_networkx_florentine()
 cat(sprintf("Florentine: n = %d, m = %d\n", vcount(g_flo), ecount(g_flo)))
 cat("Families:", V(g_flo)$name, "\n")
 ```

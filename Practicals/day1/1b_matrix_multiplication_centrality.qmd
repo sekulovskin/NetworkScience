@@ -80,6 +80,22 @@ value_to_color <- function(values, n = 256) {
 
 # Reproducibility seed (igraph layouts use R's RNG under the hood)
 set.seed(1)
+
+# NetworkX's florentine_families_graph() has a fixed 15-family order and
+# excludes the isolated Pucci family. This loader reproduces that graph in R.
+networkx_florentine_names <- c(
+  "Acciaiuoli", "Medici", "Castellani", "Peruzzi", "Strozzi",
+  "Barbadori", "Ridolfi", "Tornabuoni", "Albizzi", "Salviati",
+  "Pazzi", "Bischeri", "Guadagni", "Ginori", "Lamberteschi"
+)
+
+load_networkx_florentine <- function() {
+  data(flo, package = "network")
+  g <- graph_from_adjacency_matrix(flo, mode = "undirected", diag = FALSE)
+  g <- delete_vertices(g, degree(g) == 0)
+  g <- permute(g, order(match(networkx_florentine_names, V(g)$name)))
+  g
+}
 ```
 
 ```{r}
@@ -431,15 +447,12 @@ Centrality measures try to capture, in a single number, **how important** a node
 
 ### 4.1 Florentine families network
 
-We load the classic Florentine marriage network. NetworkX ships it as a convenience constructor; in R it comes with the `network` package (Padgett's data) as an adjacency matrix.
+We load the classic Florentine marriage network. NetworkX ships it as a convenience constructor; in R we load Padgett's data from the `network` package, drop the isolated Pucci family, and reorder/check it to match NetworkX's graph.
 
 ```{r}
 #| label: c-flo-load
-# Load the Florentine families network (drop the isolated Pucci family,
-# like networkx's florentine_families_graph()).
-data(flo, package = "network")
-G_flo <- graph_from_adjacency_matrix(flo, mode = "undirected")
-G_flo <- delete_vertices(G_flo, degree(G_flo) == 0)
+# Student scaffold: load the Florentine families network.
+G_flo <- load_networkx_florentine()
 cat(sprintf("Florentine: n = %d, m = %d\n", vcount(G_flo), ecount(G_flo)))
 cat("Families:", V(G_flo)$name, "\n")
 ```
@@ -454,11 +467,11 @@ We collect them in a data frame for inspection.
 cent <- tibble(
   family      = V(G_flo)$name,
   degree      = degree(G_flo),
-  closeness   = closeness(G_flo),
+  closeness   = closeness(G_flo, normalized = TRUE),
   betweenness = betweenness(G_flo),
   eigenvector = eigen_centrality(G_flo)$vector,
   pagerank    = page_rank(G_flo)$vector,
-  harmonic    = harmonic_centrality(G_flo)
+  harmonic    = harmonic_centrality(G_flo, normalized = TRUE)
 )
 
 sort_by <- "betweenness"  # try: "degree", "closeness", "eigenvector", "pagerank"
@@ -499,11 +512,13 @@ names_tw <- V(G_tw)$name
 
 top_n_tbl <- function(values, names_v, label, n = 15) {
   tibble(name = names_v, !!label := values) |>
-    slice_max(.data[[label]], n = n)
+    arrange(desc(.data[[label]])) |>
+    slice_head(n = n)
 }
 
 hits <- hits_scores(G_tw)
-cc <- top_n_tbl(closeness(G_tw, mode = "all"),           names_tw, "closeness")
+cc <- top_n_tbl(closeness(G_tw, mode = "all", normalized = TRUE),
+                names_tw, "closeness")
 bc <- top_n_tbl(betweenness(G_tw, directed = TRUE),      names_tw, "betweenness")
 pr <- top_n_tbl(page_rank(G_tw, directed = TRUE)$vector, names_tw, "pagerank")
 hb <- top_n_tbl(hits$hub,                                names_tw, "hub_score")
@@ -693,7 +708,7 @@ names_flo <- V(G_flo)$name
 centralities <- list(
   degree      = as.numeric(degree(G_flo)),
   betweenness = as.numeric(betweenness(G_flo)),
-  closeness   = as.numeric(closeness(G_flo)),
+  closeness   = as.numeric(closeness(G_flo, normalized = TRUE)),
   eigenvector = as.numeric(eigen_centrality(G_flo)$vector)
 )
 
