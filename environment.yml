@@ -2,7 +2,8 @@ name: network-science-summer-school
 channels:
   - conda-forge
 dependencies:
-  - python>=3.11,<3.13
+  # Binder/repo2docker needs an exact Python version here; ranges are treated as unspecified.
+  - python=3.11
   - cairocffi
   - python-igraph
   - ipykernel
